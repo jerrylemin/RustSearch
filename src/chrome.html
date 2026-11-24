@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; base-uri 'none'">
+<title>RustSearch</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --base: light-dark(#edf2f6, #17212a);
+    --surface: light-dark(#fff, #202d38);
+    --line: light-dark(#cad5df, #435363);
+    --ink: light-dark(#172938, #f2f6fa);
+    --muted: light-dark(#425d72, #aabfd0);
+    --accent: light-dark(#007c84, #65d4c9);
+    --active: light-dark(#d9efef, #25434a);
+    font: 14px 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--base); color: var(--ink); overflow: hidden; }
+  button, input, select { font: inherit; color: inherit; }
+  button { background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--active); }
+  button:disabled { opacity: .45; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #bar { height: 52px; display: flex; align-items: center; gap: 5px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+  #bar button { min-width: 32px; height: 32px; }
+  #address-form { flex: 1; min-width: 0; display: flex; gap: 5px; }
+  input, select { border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 7px 10px; }
+  #address { width: 100%; min-width: 0; height: 34px; }
+  #address.private { border-color: light-dark(#7951a6, #ba9be9); }
+  #tabs { height: 40px; display: flex; align-items: center; gap: 4px; padding: 4px 10px; overflow: auto hidden; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+  .tab { display: flex; align-items: center; border-radius: 7px; min-width: 0; flex: 0 0 auto; background: var(--surface); border: 1px solid var(--line); }
+  .tab[aria-selected=true] { background: var(--active); border-color: var(--accent); }
+  .tab button { height: 28px; }
+  .tab .pick { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; max-width: 190px; padding: 0 9px; }
+  .tab .close { padding: 0 7px; }
+  #new { font-size: 19px; min-width: 30px; height: 29px; }
+  body.side #tabs { position: absolute; width: 214px; height: calc(100vh - 52px); flex-direction: column; align-items: stretch; padding: 9px; overflow: hidden auto; border-right: 1px solid var(--line); }
+  body.side .tab .pick { flex: 1; max-width: none; }
+  #find-row { height: 38px; display: flex; align-items: center; gap: 4px; padding: 3px 10px; border-bottom: 1px solid var(--line); }
+  body.side.find #tabs { top: 90px; height: calc(100vh - 90px); }
+  #find-row input { height: 29px; }
+  #panel { position: absolute; inset: 92px 0 0; overflow: auto; padding: 24px; background: var(--base); }
+  body.side #panel { top: 52px; left: 214px; }
+  #panel-head { display: flex; align-items: center; justify-content: space-between; }
+  h1 { font-size: 22px; margin: 0 0 14px; }
+  #panel button { padding: 7px 10px; }
+  #panel input { width: min(100%, 480px); }
+  #items { display: grid; gap: 6px; margin-top: 14px; }
+  .item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: flex; align-items: center; }
+  .item button:first-child { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+  small { display: block; color: var(--muted); margin-top: 2px; }
+  .options { display: flex; flex-wrap: wrap; gap: 8px; }
+  .options button, #panel-head button { border-color: var(--line); background: var(--surface); }
+  #message { position: absolute; z-index: 2; inset: 6px 52px auto auto; max-width: calc(100% - 110px); padding: 8px; background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; pointer-events: none; }
+  #divider { position: absolute; bottom: 0; width: 6px; background: var(--line); cursor: col-resize; touch-action: none; }
+  #divider:hover, #divider:focus { background: var(--accent); }
+  #pick-controls { display: flex; white-space: nowrap; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <header id="bar" aria-label="Navigation">
+    <button id="back" aria-label="Back" title="Back (Alt+Left)" data-action="back">←</button>
+    <button id="forward" aria-label="Forward" title="Forward (Alt+Right)" data-action="forward">→</button>
+    <button aria-label="Reload" title="Reload (Ctrl+R)" data-action="reload">↻</button>
+    <form id="address-form"><input id="address" aria-label="Address or search" placeholder="Search or enter an address" autocomplete="off" spellcheck="false" list="suggestions"><datalist id="suggestions"></datalist></form>
+    <div id="pick-controls" hidden><button data-action="keep_hidden">Keep hidden</button><button data-action="cancel_pick">Cancel</button></div>
+    <button id="bookmark" aria-label="Bookmark this page" title="Bookmark (Ctrl+D)" data-action="bookmark">☆</button>
+    <button aria-label="Browser menu" title="Browser menu" data-panel="menu">⋯</button>
+  </header>
+  <nav id="tabs" role="tablist" aria-label="Open tabs"><button id="new" aria-label="New tab" title="New tab (Ctrl+T)" data-action="new_tab">+</button></nav>
+  <section id="find-row" aria-label="Find on page" hidden>
+    <form id="find-form"><input id="find" aria-label="Find on page" placeholder="Find on page" autocomplete="off"></form>
+    <button title="Previous match" aria-label="Previous match" data-action="find_previous">↑</button>
+    <button title="Next match" aria-label="Next match" data-action="find_next">↓</button>
+    <button title="Close find" aria-label="Close find" data-action="close_find">×</button>
+  </section>
+  <section id="panel" hidden aria-labelledby="panel-title">
+    <div id="panel-head"><h1 id="panel-title"></h1><button aria-label="Close panel" data-action="close_panel">Close</button></div>
+    <div id="menu" class="options" hidden>
+      <button data-action="private_tab" id="private-window">New private window</button>
+      <button data-action="reopen">Reopen closed tab</button>
+      <button id="pin" data-action="pin">Pin current tab</button>
+      <button id="split" data-action="split">Split with another tab</button>
+      <button data-action="reader">Reading view</button>
+      <button data-action="picture">Picture in picture</button>
+      <button id="pick-element" data-action="pick_element">Hide an element</button>
+      <button id="reset-hidden" data-action="reset_hidden">Reset hidden elements</button>
+      <button id="tracker" data-action="toggle_tracker">Allow trackers on this site</button>
+      <button data-panel="tabs">Switch tab</button>
+      <button data-panel="bookmarks">Bookmarks</button>
+      <button data-panel="history">History</button>
+      <button data-panel="downloads">Downloads</button>
+      <button data-panel="settings">Settings</button>
+    </div>
+    <div id="settings" hidden>
+      <p><label for="engine">Search engine</label> <select id="engine"><option value="google">Google</option><option value="duck_duck_go">DuckDuckGo</option><option value="bing">Bing</option><option value="brave">Brave Search</option><option value="ecosia">Ecosia</option><option value="startpage">Startpage</option><option value="kagi">Kagi</option><option value="qwant">Qwant</option></select></p>
+      <button id="layout" data-action="layout">Move tabs to the left</button>
+    </div>
+    <input id="filter" aria-label="Filter items" placeholder="Filter items" autocomplete="off" hidden>
+    <div id="items"></div>
+  </section>
+  <div id="divider" role="separator" aria-label="Split view width" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" tabindex="0" hidden></div>
+  <div id="message" role="status" hidden></div>
+<script>
+  const byId = id => document.getElementById(id);
+  let pending = Promise.resolve();
+  const send = (action, more = {}) => {
+    const data = encodeURIComponent(JSON.stringify({action, ...more}));
+    pending = pending.then(() => fetch('/action?data=' + data)).catch(console.error);
+  };
+  const address = byId('address');
+  const filter = byId('filter');
+  let model, messageTimer, lastPanel;
+  let tabKey;
+  const divider = byId('divider');
+  function placeDivider() {
+    const x = model.side_tabs ? 214 : 0;
+    divider.style.left = x + Math.floor((innerWidth - x - 6) * model.split_percent / 100) + 'px';
+    divider.style.top = (model.side_tabs ? 52 : 92) + (model.find ? 38 : 0) + 'px';
+  }
+  window.addEventListener('resize', () => { if (model) placeDivider(); });
+  divider.onpointerdown = event => divider.setPointerCapture(event.pointerId);
+  divider.onpointerup = event => {
+    if (!divider.hasPointerCapture(event.pointerId)) return;
+    const x = model.side_tabs ? 214 : 0;
+    const percent = Math.round((event.clientX - x - 3) * 100 / (innerWidth - x - 6));
+    send('resize_split', {percent:Math.max(25, Math.min(75, percent))});
+  };
+  divider.onkeydown = event => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    const percent = model.split_percent + (event.key === 'ArrowLeft' ? -5 : 5);
+    send('resize_split', {percent:Math.max(25, Math.min(75, percent))});
+  };
+  function button(label, action, data, description) {
+    const el = document.createElement('button');
+    el.textContent = label;
+    if (description) el.setAttribute('aria-label', description);
+    el.onclick = () => send(action, data);
+    return el;
+  }
+  function showMessage(text) {
+    const el = byId('message');
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(messageTimer);
+    messageTimer = setTimeout(() => el.hidden = true, 4200);
+  }
+  function focusAddress() { address.focus(); address.select(); }
+  function render(data) {
+    const previous = model;
+    model = data;
+    document.body.classList.toggle('side', model.side_tabs);
+    document.body.classList.toggle('find', model.find);
+    divider.hidden = !model.split || Boolean(model.panel);
+    divider.setAttribute('aria-valuenow', model.split_percent);
+    placeDivider();
+    byId('pick-controls').hidden = !model.picking;
+    byId('tabs').setAttribute('aria-orientation', model.side_tabs ? 'vertical' : 'horizontal');
+    byId('find-row').hidden = !model.find;
+    if (!model.find) byId('find').value = '';
+    byId('back').disabled = !model.back;
+    byId('forward').disabled = !model.forward;
+    byId('bookmark').disabled = !model.can_bookmark;
+    byId('bookmark').textContent = model.bookmarked ? '★' : '☆';
+    byId('bookmark').setAttribute('aria-pressed', model.bookmarked);
+    address.classList.toggle('private', model.private);
+    address.placeholder = model.private ? 'Private tab · Search or enter an address' : 'Search or enter an address';
+    if (document.activeElement !== address || !previous || previous.active !== model.active) address.value = model.address;
+    const nextKey = JSON.stringify([model.tabs, model.active]);
+    if (tabKey !== nextKey) {
+      tabKey = nextKey;
+      const focused = document.activeElement?.dataset.tab;
+      byId('tabs').replaceChildren(...model.tabs.map(tab => {
+        const root = document.createElement('div');
+        root.className = 'tab';
+        root.setAttribute('role', 'tab');
+        root.setAttribute('aria-label', tab.label);
+        root.setAttribute('aria-selected', tab.id === model.active);
+        const description = `${tab.private ? 'Private: ' : ''}${tab.label}`;
+        const pick = button((tab.private ? '◆ ' : '') + (tab.pinned ? Array.from(tab.label)[0] : tab.label), 'select', {id: tab.id}, description);
+        pick.className = 'pick';
+        pick.title = description;
+        pick.dataset.tab = tab.id;
+        const close = button('×', 'close', {id: tab.id}, `Close ${description}`);
+        close.className = 'close';
+        root.append(pick, close);
+        return root;
+      }), byId('new'));
+      if (focused) document.querySelector(`[data-tab="${focused}"]`)?.focus();
+    }
+    byId('suggestions').replaceChildren(...model.suggestions.map(page => {
+      const option = document.createElement('option'); option.value = page.url; option.label = page.title; return option;
+    }));
+    const panelChanged = lastPanel !== model.panel;
+    if (panelChanged) {
+      lastPanel = model.panel;
+      filter.value = '';
+      if (!model.panel) byId('items').replaceChildren();
+    }
+    renderPanel();
+    if (panelChanged && !byId('panel').hidden) (filter.hidden ? byId('panel-head').querySelector('button') : filter).focus();
+  }
+  function renderPanel() {
+    const panel = model.panel;
+    const title = {menu:'Browser menu', settings:'Settings', history:'History', bookmarks:'Bookmarks', downloads:'Downloads', tabs:'Switch tab', split:'Split with another tab'};
+    byId('panel').hidden = !panel;
+    byId('menu').hidden = panel !== 'menu';
+    byId('settings').hidden = panel !== 'settings';
+    filter.hidden = !panel || ['menu','settings'].includes(panel);
+    if (!panel) return;
+    byId('panel-title').textContent = title[panel];
+    byId('engine').value = model.engine;
+    byId('layout').textContent = model.side_tabs ? 'Move tabs to the top' : 'Move tabs to the left';
+    byId('pin').textContent = model.pinned ? 'Unpin current tab' : 'Pin current tab';
+    byId('pin').disabled = model.private;
+    byId('split').textContent = model.split ? 'Separate split tabs' : 'Split with another tab';
+    byId('private-window').textContent = model.private ? 'New private tab' : 'New private window';
+    byId('tracker').hidden = !model.tracker_toggle;
+    byId('pick-element').hidden = !model.can_hide;
+    byId('reset-hidden').hidden = !model.has_hidden;
+    byId('tracker').textContent = model.tracker_disabled ? 'Block trackers on this site' : 'Allow trackers on this site';
+    const query = filter.value.toLocaleLowerCase();
+    const items = model.items.filter(item => `${item.label} ${item.detail}`.toLocaleLowerCase().includes(query));
+    byId('items').replaceChildren(...items.map(item => {
+      const row = document.createElement('div');
+      row.className = 'item';
+      const open = button(item.label, 'open_item', {id: item.id});
+      open.disabled = panel === 'downloads';
+      const detail = document.createElement('small'); detail.textContent = item.detail; open.append(detail);
+      row.append(open);
+      if (panel === 'bookmarks' || panel === 'history') row.append(button('Remove', 'remove_item', {id: item.id}));
+      return row;
+    }));
+    if (!filter.hidden && !items.length) byId('items').textContent = 'No items';
+  }
+  document.addEventListener('click', event => {
+    const target = event.target.closest('button');
+    if (target?.dataset.panel) send('open_panel', {panel:target.dataset.panel});
+    if (target?.dataset.action) send(target.dataset.action);
+  });
+  byId('address-form').onsubmit = event => { event.preventDefault(); send('navigate', {text:address.value}); };
+  byId('find-form').onsubmit = event => { event.preventDefault(); send('find_next'); };
+  byId('find').oninput = event => send('find_text', {text:event.target.value});
+  byId('engine').onchange = event => send('engine', {engine:event.target.value});
+  filter.oninput = renderPanel;
+  filter.onkeydown = event => { if (event.key === 'Enter') byId('items').querySelector('button:not(:disabled)')?.click(); };
+  send('ready');
+</script>
+</body>
+</html>
